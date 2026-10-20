@@ -2,6 +2,7 @@ import streamlit as st
 import cv2
 import numpy as np
 import mediapipe as mp
+import requests
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 
 st.set_page_config(page_title="Kiosco de Asistencia", layout="centered")
@@ -25,35 +26,28 @@ class FaceMeshTransformer(VideoTransformerBase):
         self.blink_counter = 0
 
     def transform(self, frame):
-        # Convertir a formato OpenCV
         img = frame.to_ndarray(format="bgr24")
         img_h, img_w, _ = img.shape
         
-        # Procesar con MediaPipe
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = self.face_mesh.process(rgb_img)
 
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
-                # Puntos de referencia del Ojo Derecho para medir apertura
-                # 159 (arriba), 145 (abajo), 33 (izq), 133 (der)
                 p_top = (face_landmarks.landmark[159].x * img_w, face_landmarks.landmark[159].y * img_h)
                 p_bot = (face_landmarks.landmark[145].x * img_w, face_landmarks.landmark[145].y * img_h)
                 p_l = (face_landmarks.landmark[33].x * img_w, face_landmarks.landmark[33].y * img_h)
                 p_r = (face_landmarks.landmark[133].x * img_w, face_landmarks.landmark[133].y * img_h)
                 
-                # Calcular Relación de Aspecto (EAR) simplificada
                 ear = distance(p_top, p_bot) / distance(p_l, p_r)
                 
-                # Detectar parpadeo (umbral bajo = ojo cerrado)
                 if ear < 0.15:
                     self.blink_counter += 1
                 else:
-                    if self.blink_counter >= 2:  # Frames seguidos con ojo cerrado
+                    if self.blink_counter >= 2:
                         self.liveness_passed = True
                     self.blink_counter = 0
                     
-                # Dibujar caja alrededor del rostro
                 x_min = int(min([lm.x for lm in face_landmarks.landmark]) * img_w)
                 y_min = int(min([lm.y for lm in face_landmarks.landmark]) * img_h)
                 x_max = int(max([lm.x for lm in face_landmarks.landmark]) * img_w)
@@ -61,16 +55,17 @@ class FaceMeshTransformer(VideoTransformerBase):
                 
                 color = (0, 255, 0) if self.liveness_passed else (0, 0, 255)
                 cv2.rectangle(img, (x_min, y_min), (x_max, y_max), color, 2)
-                
-                # Etiqueta de estado
                 status = "Persona Real Validada" if self.liveness_passed else "Esperando parpadeo..."
                 cv2.putText(img, status, (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
         
         return img
 
 # --- INTERFAZ PRINCIPAL ---
-st.title("⏱️ Kiosco de Asistencia - Empresa")
-st.markdown("Colócate frente a la cámara y **parpadea** para registrar tu entrada/salida.")
+st.title("⏱️ Kiosco de Asistencia")
+st.markdown("Selecciona tu nombre, colócate frente a la cámara y **parpadea**.")
+
+empleado = st.selectbox("Selecciona tu nombre:", ["Arturo Aguilar", "Wendy Padilla", "Ángel Perales", "Gabriel Cárdenas"])
+tipo_registro = st.radio("¿Qué vas a registrar?", ["Entrada", "Salida"])
 
 webrtc_ctx = webrtc_streamer(
     key="kiosco",
@@ -82,6 +77,20 @@ webrtc_ctx = webrtc_streamer(
 if webrtc_ctx.video_transformer:
     if st.button("Registrar Asistencia"):
         if webrtc_ctx.video_transformer.liveness_passed:
-            st.success("✅ Asistencia registrada correctamente. (Aquí enviaremos el dato a la nube)")
+            
+            # ---> PEGA TU URL EXACTAMENTE ABAJO DE ESTA LÍNEA <---
+            webhook_url = "https://script.google.com/macros/s/AKfycbxXl7xolaMAD8WyPCbq6EZSHn61Zs8xe9Atc9kzb1Dds5ceKhl_lq0BPKXnl7ZvJKTa/exec"
+            
+            datos = {"nombre": empleado, "tipo": tipo_registro}
+            
+            try:
+                respuesta = requests.post(webhook_url, json=datos)
+                if respuesta.status_code == 200:
+                    st.success(f"✅ Asistencia registrada correctamente para {empleado}.")
+                    webrtc_ctx.video_transformer.liveness_passed = False 
+                else:
+                    st.error("Hubo un error al guardar en la base de datos.")
+            except Exception as e:
+                st.error(f"Error de conexión: {e}")
         else:
-            st.error("❌ Por favor, parpadea para verificar que no eres una fotografía.")
+            st.error("❌ Por favor, parpadea para verificar que eres una persona real.")
