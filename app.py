@@ -136,7 +136,7 @@ class BiometricTransformer(VideoTransformerBase):
                 y_max = int(max([lm.y for lm in lms]) * h)
 
                 # Verificar si la cara está dentro de la zona enmarcada
-                 margen = 25
+                margen = 25
                 if (x_min >= box_x1 - margen and x_max <= box_x2 + margen and
                     y_min >= box_y1 - margen and y_max <= box_y2 + margen):
                     self.face_in_box = True
