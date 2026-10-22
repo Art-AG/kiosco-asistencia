@@ -11,7 +11,6 @@ from datetime import datetime
 # ---------------------------------------------------------
 st.set_page_config(page_title="Sistema Biométrico PEMEX", layout="centered")
 
-# ---> TU NUEVA URL DE GOOGLE SHEETS YA ESTÁ INTEGRADA AQUÍ <---
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzrPOzhaYX6Qa8HTq5cd82TgvUA1oPWNGHHzKXFvJJKDqSc2oGotnAyEzljy_lwAYIcdQ/exec"
 USUARIO_AUTORIZADO = "ASIS_PEMEX2026"
 PASSWORD_AUTORIZADO = "Personal_PEMEX2026"
@@ -69,13 +68,6 @@ def renderizar_lector_alta(nombre_empleado):
     </div>
 
     <script>
-    function bufferToBase64url(buffer) {{
-        const bytes = new Uint8Array(buffer);
-        let str = "";
-        for (let charCode of bytes) str += String.fromCharCode(charCode);
-        return btoa(str).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
-    }}
-
     async function registrarHuella() {{
         const statusBox = document.getElementById("status_box");
         const btn = document.getElementById("btn_alta");
@@ -87,33 +79,45 @@ def renderizar_lector_alta(nombre_empleado):
             statusBox.style.color = "#d97706";
             statusBox.innerHTML = "⏳ Coloca tu dedo en el lector de huella del teléfono...";
 
-            if (window.parent && !window.parent.obtenerHuellaAlta) {{
-                window.parent.obtenerHuellaAlta = async function(nombreEmpleado) {{
-                    const challenge = new Uint8Array(32);
-                    crypto.getRandomValues(challenge);
-                    const userId = new Uint8Array(16);
-                    crypto.getRandomValues(userId);
+            // Tomamos el control de la ventana principal para evitar el error "Context is detached"
+            const pWin = window.parent || window;
+            const pNav = pWin.navigator;
 
-                    const publicKey = {{
-                        challenge: challenge,
-                        rp: {{ name: "Sistema PEMEX" }},
-                        user: {{ id: userId, name: nombreEmpleado, displayName: nombreEmpleado }},
-                        pubKeyCredParams: [{{ type: "public-key", alg: -7 }}, {{ type: "public-key", alg: -257 }}],
-                        authenticatorSelection: {{ userVerification: "preferred" }},
-                        timeout: 60000
-                    }};
-                    const cred = await navigator.credentials.create({{ publicKey }});
-                    return cred.rawId;
-                }};
+            if (!pNav.credentials) {{
+                throw new Error("Tu navegador no soporta lectura biométrica.");
             }}
 
-            const rawId = await window.parent.obtenerHuellaAlta(nombre);
-            const credId = bufferToBase64url(rawId);
+            // Creamos los objetos usando el entorno de la ventana principal
+            const challenge = new pWin.Uint8Array(32);
+            pWin.crypto.getRandomValues(challenge);
+            
+            const userId = new pWin.Uint8Array(16);
+            pWin.crypto.getRandomValues(userId);
+
+            const publicKey = {{
+                challenge: challenge,
+                rp: {{ name: "Sistema PEMEX", id: pWin.location.hostname }},
+                user: {{ id: userId, name: nombre, displayName: nombre }},
+                pubKeyCredParams: [{{ type: "public-key", alg: -7 }}, {{ type: "public-key", alg: -257 }}],
+                authenticatorSelection: {{ userVerification: "preferred" }},
+                timeout: 60000
+            }};
+
+            // Ejecutamos la lectura directamente en la ventana principal
+            const cred = await pNav.credentials.create({{ publicKey }});
+            
+            // Convertimos la huella a Base64 para guardarla en Google Sheets
+            const bytes = new Uint8Array(cred.rawId);
+            let str = "";
+            for (let i = 0; i < bytes.length; i++) {{
+                str += String.fromCharCode(bytes[i]);
+            }}
+            const credId = btoa(str).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
 
             statusBox.style.color = "#2563eb";
             statusBox.innerHTML = "☁️ Huella procesada. Guardando en la nube...";
 
-            const payload = {{ action: "register_fingerprint", nombre: nombre, credencial_id: credId, vector: credId }};
+            const payload = {{ action: "register_fingerprint", nombre: nombre, credencial_id: credId }};
             
             const response = await fetch(webhookUrl, {{ 
                 method: "POST", 
@@ -167,13 +171,6 @@ def renderizar_lector_asistencia(tipo_movimiento, huellas_registradas):
     </div>
 
     <script>
-    function bufferToBase64url(buffer) {{
-        const bytes = new Uint8Array(buffer);
-        let str = "";
-        for (let charCode of bytes) str += String.fromCharCode(charCode);
-        return btoa(str).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
-    }}
-
     async function verificarHuella() {{
         const statusBox = document.getElementById("status_asistencia");
         const btn = document.getElementById("btn_asistencia");
@@ -192,39 +189,46 @@ def renderizar_lector_asistencia(tipo_movimiento, huellas_registradas):
             statusBox.style.color = "#d97706";
             statusBox.innerHTML = "⏳ Escaneando huella dactilar...";
 
-            if (window.parent && !window.parent.obtenerHuellaAsistencia) {{
-                window.parent.obtenerHuellaAsistencia = async function(huellasData) {{
-                    const base64urlToBufferLocal = function(base64url) {{
-                        const padding = "=".repeat((4 - (base64url.length % 4)) % 4);
-                        const base64 = (base64url + padding).replace(/\\-/g, "+").replace(/_/g, "/");
-                        const rawData = atob(base64);
-                        const buffer = new Uint8Array(rawData.length);
-                        for (let i = 0; i < rawData.length; ++i) buffer[i] = rawData.charCodeAt(i);
-                        return buffer;
-                    }};
+            const pWin = window.parent || window;
+            const pNav = pWin.navigator;
 
-                    const allowCredentials = huellasData.map(item => ({{
-                        type: "public-key",
-                        id: base64urlToBufferLocal(item.credencial_id)
-                    }}));
+            const challenge = new pWin.Uint8Array(32);
+            pWin.crypto.getRandomValues(challenge);
 
-                    const challenge = new Uint8Array(32);
-                    crypto.getRandomValues(challenge);
-                    
-                    const publicKey = {{
-                        challenge: challenge,
-                        allowCredentials: allowCredentials,
-                        userVerification: "preferred",
-                        timeout: 60000
-                    }};
-                    const assertion = await navigator.credentials.get({{ publicKey }});
-                    return assertion.rawId;
-                }};
+            // Reconstruimos las llaves biométricas en el contexto de la ventana principal
+            const allowCredentials = baseHuellas.map(item => {{
+                const base64url = item.credencial_id;
+                const padding = "=".repeat((4 - (base64url.length % 4)) % 4);
+                const base64 = (base64url + padding).replace(/\\-/g, "+").replace(/_/g, "/");
+                const rawData = atob(base64);
+                
+                const buffer = new pWin.Uint8Array(rawData.length);
+                for (let i = 0; i < rawData.length; ++i) {{
+                    buffer[i] = rawData.charCodeAt(i);
+                }}
+                
+                return {{ type: "public-key", id: buffer }};
+            }});
+            
+            const publicKey = {{
+                challenge: challenge,
+                allowCredentials: allowCredentials,
+                userVerification: "preferred",
+                timeout: 60000
+            }};
+
+            // Ejecutamos la lectura
+            const assertion = await pNav.credentials.get({{ publicKey }});
+            
+            // Convertimos la huella leída a Base64
+            const bytes = new Uint8Array(assertion.rawId);
+            let str = "";
+            for (let i = 0; i < bytes.length; i++) {{
+                str += String.fromCharCode(bytes[i]);
             }}
+            const credIdLeida = btoa(str).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
 
-            const rawId = await window.parent.obtenerHuellaAsistencia(baseHuellas);
-            const credIdLeida = bufferToBase64url(rawId);
-
+            // Buscamos a quién le pertenece en la base de datos
             const empleadoEncontrado = baseHuellas.find(item => item.credencial_id === credIdLeida);
 
             if (!empleadoEncontrado) {{
