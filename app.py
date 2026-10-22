@@ -11,8 +11,8 @@ from datetime import datetime
 # ---------------------------------------------------------
 st.set_page_config(page_title="Sistema Biométrico PEMEX", layout="centered")
 
-# ---> ASEGÚRATE DE MANTENER TU URL DE GOOGLE SHEETS AQUÍ <---
-WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxXl7xolaMAD8WyPCbq6EZSHn61Zs8xe9Atc9kzb1Dds5ceKhl_lq0BPKXnl7ZvJKTa/exec"
+# ---> TU NUEVA URL DE GOOGLE SHEETS YA ESTÁ INTEGRADA AQUÍ <---
+WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzrPOzhaYX6Qa8HTq5cd82TgvUA1oPWNGHHzKXFvJJKDqSc2oGotnAyEzljy_lwAYIcdQ/exec"
 USUARIO_AUTORIZADO = "ASIS_PEMEX2026"
 PASSWORD_AUTORIZADO = "Personal_PEMEX2026"
 
@@ -87,7 +87,6 @@ def renderizar_lector_alta(nombre_empleado):
             statusBox.style.color = "#d97706";
             statusBox.innerHTML = "⏳ Coloca tu dedo en el lector de huella del teléfono...";
 
-            // Inyectamos la función en la ventana principal para evitar el TypeError de seguridad del iframe
             if (window.parent && !window.parent.obtenerHuellaAlta) {{
                 window.parent.obtenerHuellaAlta = async function(nombreEmpleado) {{
                     const challenge = new Uint8Array(32);
@@ -108,7 +107,6 @@ def renderizar_lector_alta(nombre_empleado):
                 }};
             }}
 
-            // Ejecutamos la función en la ventana principal
             const rawId = await window.parent.obtenerHuellaAlta(nombre);
             const credId = bufferToBase64url(rawId);
 
@@ -116,7 +114,14 @@ def renderizar_lector_alta(nombre_empleado):
             statusBox.innerHTML = "☁️ Huella procesada. Guardando en la nube...";
 
             const payload = {{ action: "register_fingerprint", nombre: nombre, credencial_id: credId, vector: credId }};
-            const response = await fetch(webhookUrl, {{ method: "POST", body: JSON.stringify(payload) }});
+            
+            const response = await fetch(webhookUrl, {{ 
+                method: "POST", 
+                redirect: "follow",
+                headers: {{ "Content-Type": "text/plain;charset=utf-8" }},
+                body: JSON.stringify(payload) 
+            }});
+            
             const resData = await response.json();
             
             if (resData.status === "success") {{
@@ -233,7 +238,14 @@ def renderizar_lector_asistencia(tipo_movimiento, huellas_registradas):
             statusBox.innerHTML = "☁️ Identificado: <b>" + empleadoEncontrado.nombre + "</b>. Guardando...";
 
             const payload = {{ action: "log_attendance", nombre: empleadoEncontrado.nombre, tipo: tipo }};
-            const response = await fetch(webhookUrl, {{ method: "POST", body: JSON.stringify(payload) }});
+            
+            const response = await fetch(webhookUrl, {{ 
+                method: "POST",
+                redirect: "follow",
+                headers: {{ "Content-Type": "text/plain;charset=utf-8" }},
+                body: JSON.stringify(payload) 
+            }});
+            
             const resData = await response.json();
             
             if (resData.status === "success") {{
