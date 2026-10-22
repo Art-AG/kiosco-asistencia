@@ -11,6 +11,7 @@ from datetime import datetime
 # ---------------------------------------------------------
 st.set_page_config(page_title="Sistema Biométrico PEMEX", layout="centered")
 
+# ---> ASEGÚRATE DE MANTENER TU URL DE GOOGLE SHEETS AQUÍ <---
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxXl7xolaMAD8WyPCbq6EZSHn61Zs8xe9Atc9kzb1Dds5ceKhl_lq0BPKXnl7ZvJKTa/exec"
 USUARIO_AUTORIZADO = "ASIS_PEMEX2026"
 PASSWORD_AUTORIZADO = "Personal_PEMEX2026"
@@ -26,7 +27,6 @@ if "huellas_db" not in st.session_state:
 # SINCRONIZACIÓN CON GOOGLE SHEETS
 # ---------------------------------------------------------
 def cargar_huellas_desde_nube():
-    """Descarga el catálogo de huellas registradas en Google Sheets."""
     try:
         resp = requests.post(WEBHOOK_URL, json={"action": "get_fingerprints"}, timeout=15)
         if resp.status_code == 200:
@@ -46,10 +46,9 @@ def cargar_huellas_desde_nube():
         st.warning(f"Error al sincronizar con la nube: {e}")
 
 # ---------------------------------------------------------
-# COMPONENTE WEBAUTHN: LECTOR DE HUELLA DEL TELÉFONO
+# COMPONENTE WEBAUTHN: ALTA DE HUELLA
 # ---------------------------------------------------------
 def renderizar_lector_alta(nombre_empleado):
-    """Genera el botón que activa el sensor de huella nativo del celular para registrar personal."""
     nombre_escapado = json.dumps(nombre_empleado.strip())
     url_escapada = json.dumps(WEBHOOK_URL)
 
@@ -73,9 +72,7 @@ def renderizar_lector_alta(nombre_empleado):
     function bufferToBase64url(buffer) {{
         const bytes = new Uint8Array(buffer);
         let str = "";
-        for (let charCode of bytes) {{
-            str += String.fromCharCode(charCode);
-        }}
+        for (let charCode of bytes) str += String.fromCharCode(charCode);
         return btoa(str).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
     }}
 
@@ -85,91 +82,65 @@ def renderizar_lector_alta(nombre_empleado):
         const nombre = {nombre_escapado};
         const webhookUrl = {url_escapada};
 
-        const win = (window.parent && window.parent.PublicKeyCredential) ? window.parent : window;
-        const nav = (window.parent && window.parent.navigator && window.parent.navigator.credentials) ? window.parent.navigator : navigator;
-
-        if (!win.PublicKeyCredential) {{
-            statusBox.style.color = "#dc2626";
-            statusBox.innerHTML = "❌ Este navegador o dispositivo no soporta lectura de huella WebAuthn.";
-            return;
-        }}
-
         try {{
             btn.disabled = true;
             statusBox.style.color = "#d97706";
             statusBox.innerHTML = "⏳ Coloca tu dedo en el lector de huella del teléfono...";
 
-            const challenge = new win.Uint8Array(32);
-            win.crypto.getRandomValues(challenge);
+            // Inyectamos la función en la ventana principal para evitar el TypeError de seguridad del iframe
+            if (window.parent && !window.parent.obtenerHuellaAlta) {{
+                window.parent.obtenerHuellaAlta = async function(nombreEmpleado) {{
+                    const challenge = new Uint8Array(32);
+                    crypto.getRandomValues(challenge);
+                    const userId = new Uint8Array(16);
+                    crypto.getRandomValues(userId);
 
-            const userId = new win.Uint8Array(16);
-            win.crypto.getRandomValues(userId);
+                    const publicKey = {{
+                        challenge: challenge,
+                        rp: {{ name: "Sistema PEMEX" }},
+                        user: {{ id: userId, name: nombreEmpleado, displayName: nombreEmpleado }},
+                        pubKeyCredParams: [{{ type: "public-key", alg: -7 }}, {{ type: "public-key", alg: -257 }}],
+                        authenticatorSelection: {{ userVerification: "preferred" }},
+                        timeout: 60000
+                    }};
+                    const cred = await navigator.credentials.create({{ publicKey }});
+                    return cred.rawId;
+                }};
+            }}
 
-            const publicKey = {{
-                challenge: challenge,
-                rp: {{
-                    name: "Sistema de Asistencia PEMEX",
-                    id: win.location.hostname
-                }},
-                user: {{
-                    id: userId,
-                    name: nombre,
-                    displayName: nombre
-                }},
-                pubKeyCredParams: [
-                    {{ type: "public-key", alg: -7 }},
-                    {{ type: "public-key", alg: -257 }}
-                ],
-                authenticatorSelection: {{
-                    authenticatorAttachment: "platform",
-                    userVerification: "required",
-                    residentKey: "preferred"
-                }},
-                timeout: 60000,
-                attestation: "none"
-            }};
-
-            const credential = await nav.credentials.create({{ publicKey }});
-            const credId = bufferToBase64url(credential.rawId);
+            // Ejecutamos la función en la ventana principal
+            const rawId = await window.parent.obtenerHuellaAlta(nombre);
+            const credId = bufferToBase64url(rawId);
 
             statusBox.style.color = "#2563eb";
-            statusBox.innerHTML = "☁️ Huella verificada. Guardando en Google Sheets...";
+            statusBox.innerHTML = "☁️ Huella procesada. Guardando en la nube...";
 
-            const payload = {{
-                action: "register_fingerprint",
-                nombre: nombre,
-                credencial_id: credId,
-                vector: credId
-            }};
-
-            const response = await fetch(webhookUrl, {{
-                method: "POST",
-                headers: {{ "Content-Type": "text/plain;charset=utf-8" }},
-                body: JSON.stringify(payload)
-            }});
-
+            const payload = {{ action: "register_fingerprint", nombre: nombre, credencial_id: credId, vector: credId }};
+            const response = await fetch(webhookUrl, {{ method: "POST", body: JSON.stringify(payload) }});
             const resData = await response.json();
+            
             if (resData.status === "success") {{
                 statusBox.style.color = "#16a34a";
-                statusBox.innerHTML = "✅ ¡Huella de <b>" + nombre + "</b> guardada exitosamente en la nube!";
+                statusBox.innerHTML = "✅ ¡Huella guardada exitosamente!";
             }} else {{
                 statusBox.style.color = "#dc2626";
-                statusBox.innerHTML = "❌ Error al guardar en BD: " + (resData.message || "");
-                btn.disabled = false;
+                statusBox.innerHTML = "❌ Error en BD: " + (resData.message || "");
             }}
         }} catch (err) {{
             statusBox.style.color = "#dc2626";
-            statusBox.innerHTML = "❌ Lectura cancelada o fallida. Asegúrate de tener tu huella activa en el teléfono. (" + err.name + ")";
+            statusBox.innerHTML = "❌ Lectura cancelada. (" + err.message + ")";
+        }} finally {{
             btn.disabled = false;
         }}
     }}
     </script>
     """
-    components.html(html_code, height=280)
+    components.html(html_code, height=300)
 
-
+# ---------------------------------------------------------
+# COMPONENTE WEBAUTHN: REGISTRO DE ASISTENCIA
+# ---------------------------------------------------------
 def renderizar_lector_asistencia(tipo_movimiento, huellas_registradas):
-    """Genera el lector de huella para identificar al empleado y registrar su Entrada/Salida."""
     huellas_json = json.dumps(huellas_registradas)
     tipo_json = json.dumps(tipo_movimiento)
     url_escapada = json.dumps(WEBHOOK_URL)
@@ -191,23 +162,10 @@ def renderizar_lector_asistencia(tipo_movimiento, huellas_registradas):
     </div>
 
     <script>
-    function base64urlToBuffer(base64url) {{
-        const padding = "=".repeat((4 - (base64url.length % 4)) % 4);
-        const base64 = (base64url + padding).replace(/-/g, "+").replace(/_/g, "/");
-        const rawData = atob(base64);
-        const buffer = new Uint8Array(rawData.length);
-        for (let i = 0; i < rawData.length; ++i) {{
-            buffer[i] = rawData.charCodeAt(i);
-        }}
-        return buffer;
-    }}
-
     function bufferToBase64url(buffer) {{
         const bytes = new Uint8Array(buffer);
         let str = "";
-        for (let charCode of bytes) {{
-            str += String.fromCharCode(charCode);
-        }}
+        for (let charCode of bytes) str += String.fromCharCode(charCode);
         return btoa(str).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
     }}
 
@@ -218,89 +176,86 @@ def renderizar_lector_asistencia(tipo_movimiento, huellas_registradas):
         const tipo = {tipo_json};
         const webhookUrl = {url_escapada};
 
-        const win = (window.parent && window.parent.PublicKeyCredential) ? window.parent : window;
-        const nav = (window.parent && window.parent.navigator && window.parent.navigator.credentials) ? window.parent.navigator : navigator;
-
         if (!baseHuellas || baseHuellas.length === 0) {{
             statusBox.style.color = "#dc2626";
-            statusBox.innerHTML = "⚠️ No hay huellas registradas en la base de datos. Registra al personal primero.";
+            statusBox.innerHTML = "⚠️ No hay huellas registradas en la base de datos.";
             return;
         }}
 
         try {{
             btn.disabled = true;
             statusBox.style.color = "#d97706";
-            statusBox.innerHTML = "⏳ Escaneando huella dactilar en el teléfono...";
+            statusBox.innerHTML = "⏳ Escaneando huella dactilar...";
 
-            const challenge = new win.Uint8Array(32);
-            win.crypto.getRandomValues(challenge);
+            if (window.parent && !window.parent.obtenerHuellaAsistencia) {{
+                window.parent.obtenerHuellaAsistencia = async function(huellasData) {{
+                    const base64urlToBufferLocal = function(base64url) {{
+                        const padding = "=".repeat((4 - (base64url.length % 4)) % 4);
+                        const base64 = (base64url + padding).replace(/\\-/g, "+").replace(/_/g, "/");
+                        const rawData = atob(base64);
+                        const buffer = new Uint8Array(rawData.length);
+                        for (let i = 0; i < rawData.length; ++i) buffer[i] = rawData.charCodeAt(i);
+                        return buffer;
+                    }};
 
-            const allowCredentials = baseHuellas.map(item => {{
-                const rawBytes = base64urlToBuffer(item.credencial_id);
-                const winBuffer = new win.Uint8Array(rawBytes.length);
-                winBuffer.set(rawBytes);
-                return {{
-                    type: "public-key",
-                    id: winBuffer
+                    const allowCredentials = huellasData.map(item => ({{
+                        type: "public-key",
+                        id: base64urlToBufferLocal(item.credencial_id)
+                    }}));
+
+                    const challenge = new Uint8Array(32);
+                    crypto.getRandomValues(challenge);
+                    
+                    const publicKey = {{
+                        challenge: challenge,
+                        allowCredentials: allowCredentials,
+                        userVerification: "preferred",
+                        timeout: 60000
+                    }};
+                    const assertion = await navigator.credentials.get({{ publicKey }});
+                    return assertion.rawId;
                 }};
-            }});
+            }}
 
-            const publicKey = {{
-                challenge: challenge,
-                rpId: win.location.hostname,
-                allowCredentials: allowCredentials,
-                userVerification: "required",
-                timeout: 60000
-            }};
-
-            const assertion = await nav.credentials.get({{ publicKey }});
-            const credIdLeida = bufferToBase64url(assertion.rawId);
+            const rawId = await window.parent.obtenerHuellaAsistencia(baseHuellas);
+            const credIdLeida = bufferToBase64url(rawId);
 
             const empleadoEncontrado = baseHuellas.find(item => item.credencial_id === credIdLeida);
 
             if (!empleadoEncontrado) {{
                 statusBox.style.color = "#dc2626";
-                statusBox.innerHTML = "❌ Huella no reconocida en la base de datos de la empresa.";
+                statusBox.innerHTML = "❌ Huella no reconocida.";
                 btn.disabled = false;
                 return;
             }}
 
             statusBox.style.color = "#2563eb";
-            statusBox.innerHTML = "☁️ Identificado: <b>" + empleadoEncontrado.nombre + "</b>. Guardando asistencia...";
+            statusBox.innerHTML = "☁️ Identificado: <b>" + empleadoEncontrado.nombre + "</b>. Guardando...";
 
-            const payload = {{
-                action: "log_attendance",
-                nombre: empleadoEncontrado.nombre,
-                tipo: tipo
-            }};
-
-            const response = await fetch(webhookUrl, {{
-                method: "POST",
-                headers: {{ "Content-Type": "text/plain;charset=utf-8" }},
-                body: JSON.stringify(payload)
-            }});
-
+            const payload = {{ action: "log_attendance", nombre: empleadoEncontrado.nombre, tipo: tipo }};
+            const response = await fetch(webhookUrl, {{ method: "POST", body: JSON.stringify(payload) }});
             const resData = await response.json();
+            
             if (resData.status === "success") {{
                 statusBox.style.color = "#15803d";
-                statusBox.innerHTML = "✅ ¡" + tipo + " registrada!<br>👤 <b>" + empleadoEncontrado.nombre + "</b><br>🕒 Hora: " + resData.hora + " | 📅 Pestaña: " + resData.fecha;
+                statusBox.innerHTML = "✅ ¡" + tipo + " registrada!<br>👤 <b>" + empleadoEncontrado.nombre + "</b><br>🕒 Hora: " + resData.hora;
             }} else {{
                 statusBox.style.color = "#dc2626";
                 statusBox.innerHTML = "❌ Error al guardar en Google Sheets.";
             }}
-            btn.disabled = false;
         }} catch (err) {{
             statusBox.style.color = "#dc2626";
-            statusBox.innerHTML = "❌ No se pudo validar la huella o el proceso fue cancelado.";
+            statusBox.innerHTML = "❌ Lectura cancelada. (" + err.message + ")";
+        }} finally {{
             btn.disabled = false;
         }}
     }}
     </script>
     """
-    components.html(html_code, height=310)
+    components.html(html_code, height=330)
 
 # ---------------------------------------------------------
-# 1. PANTALLA DE ACCESO EXCLUSIVO AUTORIZADO
+# PANTALLAS DE LA APLICACIÓN
 # ---------------------------------------------------------
 if not st.session_state.autenticado:
     st.title("🔐 Acceso al Sistema Biométrico")
@@ -320,9 +275,6 @@ if not st.session_state.autenticado:
             else:
                 st.error("❌ Credenciales incorrectas. Acceso denegado.")
 
-# ---------------------------------------------------------
-# 2. PANTALLA DE AUTORIZACIÓN Y REPORTE AL CERRAR SESIÓN
-# ---------------------------------------------------------
 elif st.session_state.modo_cierre:
     st.title("📊 Corte del Día y Cierre de Sesión")
     st.warning("Estás por finalizar la sesión activa. ¿Autorizas generar el reporte en Excel y enviarlo a la nube de la empresa?")
@@ -372,9 +324,6 @@ elif st.session_state.modo_cierre:
             st.session_state.modo_cierre = False
             st.rerun()
 
-# ---------------------------------------------------------
-# 3. MENÚ PRINCIPAL DE OPERACIÓN
-# ---------------------------------------------------------
 else:
     st.sidebar.title("🏢 Panel de Control")
     st.sidebar.success(f"Operador: {USUARIO_AUTORIZADO}")
@@ -394,25 +343,17 @@ else:
         st.session_state.modo_cierre = True
         st.rerun()
 
-    # =========================================================
-    # MÓDULO A: REGISTRAR ASISTENCIA CON HUELLA
-    # =========================================================
     if opcion == "⏱️ Registrar Asistencia (Entrada/Salida)":
         st.title("⏱️ Registro de Asistencia por Huella")
         st.markdown("Selecciona el tipo de movimiento y presiona el botón verde para validar tu huella en el sensor del teléfono.")
-
         tipo_evento = st.radio("Tipo de movimiento:", ["Entrada", "Salida"], horizontal=True)
-
         renderizar_lector_asistencia(tipo_evento, st.session_state.huellas_db)
 
-    # =========================================================
-    # MÓDULO B: DAR DE ALTA HUELLA EN LA BASE DE DATOS
-    # =========================================================
     elif opcion == "👤 Dar de Alta Huella de Personal":
         st.title("👤 Alta de Huella Dactilar")
         st.markdown("1. Escribe el nombre completo del trabajador y presiona **Enter**.\n2. Toca el botón azul para activar el lector de huella del teléfono y vincularlo en la nube.")
 
-        nuevo_nombre = st.text_input("Nombre Completo del Empleado (Ej. Arturo Del Carmen Aguilar Olán):")
+        nuevo_nombre = st.text_input("Nombre Completo del Empleado:")
 
         if nuevo_nombre.strip():
             renderizar_lector_alta(nuevo_nombre)
